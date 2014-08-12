@@ -7,3 +7,7 @@ Teste
 Foo
 ===
 Novo topico
+
+Bar
+===
+Novo topico 2
