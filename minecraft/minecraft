@@ -35,7 +35,7 @@ MINECRAFT="$LOCATION/server.jar"
 JAVA="/usr/lib/jvm/java-8-oracle/jre/bin/java"
 
 #Java Options - Replace with options that are sane and stable for your server
-JAVAOPTS="-server -Xms4G -Xmx6G -XX:+UseConcMarkSweepGC -XX:+UseParNewGC -XX:+CMSIncrementalPacing -XX:ParallelGCThreads=3 -XX:+AggressiveOpts -XX:MaxPermSize=764M -jar"
+JAVAOPTS="-server -Xms5G -Xmx6G -XX:+UseConcMarkSweepGC -XX:+UseParNewGC -XX:+CMSIncrementalPacing -XX:ParallelGCThreads=3 -XX:+AggressiveOpts -XX:MaxPermSize=764M -jar"
 
 ###################
 #END CONFIGURATION#
