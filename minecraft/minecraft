@@ -1,0 +1,205 @@
+#!/bin/sh
+
+### BEGIN INIT INFO
+# Provides:             minecraft
+# Required-Start:	$syslog
+# Required-Stop:	$syslog
+# Default-Start:	2 3 4 5
+# Default-Stop:		0 1 6
+# Short-Description:    Controls the minecraft server
+### END INIT INFO
+
+
+#####################
+#START CONFIGURATION#
+#####################
+
+# Replace the location path with the folder containing your CraftBukkit.jar or minecraft_server.jar file
+LOCATION="/home/lenoria/minecraft"
+BKPWORLDS="world"
+BKPDIR="$LOCATION/backups"
+BKPHOST="echo.sprawl.diegolima.org"
+BKPHOSTUSR="root"
+BKPHOSTDIR="/mnt/snow-data/Pub/Backup/minecraft-lenoria"
+SYNCHOST=$BKPHOST
+SYNCHOSTUSR=$BKPHOSTUSR
+SYNCHOSTDIR="$BKPHOSTDIR/sync"
+SHIPBKPS="true"
+SYNC="true"
+WWW=/var/www
+
+#Replace CraftBukkit with the name of the .jar file you use
+MINECRAFT="$LOCATION/server.jar"
+
+# Path to your java executable (or just "java" if it's already in your $PATH)
+JAVA="/usr/lib/jvm/java-8-oracle/jre/bin/java"
+
+#Java Options - Replace with options that are sane and stable for your server
+JAVAOPTS="-server -Xms4G -Xmx6G -XX:+UseConcMarkSweepGC -XX:+UseParNewGC -XX:+CMSIncrementalPacing -XX:ParallelGCThreads=3 -XX:+AggressiveOpts -XX:MaxPermSize=764M -jar"
+
+###################
+#END CONFIGURATION#
+###################
+REMOTE="${BKPHOSTUSR}@${BKPHOST}:${BKPHOSTDIR}"
+RSYNC="rsync -Pa --checksum --inplace --no-whole-file"
+
+#Determine whether or not Minecraft is already running
+RUNNING=`screen -ls | grep minecraft`
+TODAY=`date +%Y%m%d`
+
+syncLock(){
+	true
+}
+
+sendCmd(){
+   CMD="$@"
+   echo "$CMD" >> $LOCATION/cmd.log
+   screen -x minecraft -p 0 -X stuff "`printf "$CMD\r"`"
+}
+
+doBackup(){
+    BKPID=$1
+    test -z $BKPID && BKPID=0
+    for WORLD in $BKPWORLDS; do
+        sendCmd "say Starting world \"${WORLD}\" backup..."
+        sendCmd "save-off"
+        if ! [ -e $BKPDIR/$WORLD-$TODAY-$BKPID.tar.bz2 ]; then
+            tar -cvjf $BKPDIR/$WORLD-$TODAY-$BKPID.tar.bz2 $LOCATION/$WORLD $LOCATION/config $LOCATION/mods
+            ERROR=$?
+            if [ $ERROR = 0 ]; then
+                sendCmd "say World $WORLD backed up successfully"
+            else
+                sendCmd "say Error $ERROR backing up world $WORLD"
+            fi
+            sendCmd "save-on"
+            if [ $SHIPBKPS = "true" ]; then
+                sendCmd "say Shipping backup..."
+                scp $BKPDIR/$WORLD-$TODAY-$BKPID.tar.bz2 $REMOTE
+                ERROR=$?
+                if [ $ERROR=0 ]; then
+                    sendCmd "say Backup shipped successfully"
+                    rm $BKPDIR/$WORLD-$TODAY-$BKPID.tar.bz2
+                    return 0
+                else
+                    sendCmd "say Error $ERROR shipping backup"
+                fi
+            fi
+        else
+            echo "Backup file $BKPDIR/$WORLD-$TODAY-$BKPID.tar.bz2 already exists"
+            return 0
+        fi
+    done
+}
+
+doStart(){
+    if [ -z "$RUNNING" ]; then
+        printf "Starting minecraft...		"
+        cd $LOCATION
+        screen -dmS minecraft $JAVA $JAVAOPTS $MINECRAFT nogui
+        if [ $? = 0 ]; then
+            echo "[OK]"
+            return 0
+        else
+            echo "[ERROR]"
+            return 1
+        fi
+        cd -
+    else
+        echo "Minecraft is already running."
+        return 0
+    fi
+}
+doStop(){
+    local REASON="$1"
+    test -z $REASON && REASON="Stopping Server!"
+
+    if ! [ -z "$RUNNING" ]; then
+        printf "Stopping minecraft...		"
+        sendCmd "kickall $REASON"
+        sleep 2
+        sendCmd "stop"
+        if [ $? = 0 ]; then
+            echo "[OK]"
+            return 0
+        else
+            echo "[ERROR]"
+            return 1
+        fi
+    else
+        echo "Minecraft is not running."
+        return 0
+    fi
+}
+updateMods(){
+    local TMPDIR=/tmp/mcmods
+    test -d $TMPDIR && rm -Rf $TMPDIR
+    test -e $WWW/mods.zip && rm -f $WWW/mods.zip
+
+    mkdir -p $TMPDIR/mods
+    mkdir -p $TMPDIR/config
+    mkdir -p $TMPDIR/Flan
+    mkdir -p $TMPDIR/shaderpacks
+
+    cp -r $LOCATION/mods/* $TMPDIR/mods
+    cp -r $LOCATION/config/* $TMPDIR/config
+    cp -r $WWW/shaderpacks/* $TMPDIR/shaderpacks
+    cp -r $WWW/clientmods/* $TMPDIR/mods
+    cp -r $LOCATION/Flan $TMPDIR/Flan
+    cd $TMPDIR
+    zip -r mods.zip mods config shaderpacks Flan && \
+        mv mods.zip $WWW
+    cd -
+    rm -Rf $TMPDIR
+}
+cloneServer(){
+    local RHOST=$1
+    local RUSER=$2
+    test -z $RUSER && RUSER="root"
+
+    doStop
+    ssh $RUSER@$RHOST "mkdir -p $LOCATION $WWW"
+    rsync -az --progress $LOCATION $RUSER@$RHOST:$LOCATION
+    rsync -az --progress $WWW      $RUSER@$RHOST:$WWW
+    scp -pr /etc/init.d/minecraft $USER@$RHOST:/etc/init.d/minecraft
+    ssh $RUSER@$RHOST "echo \"0  0    * * *   root    service minecraft backup 1 &\" >> /etc/crontab"
+    ssh $RUSER@$RHOST "echo \"0  6    * * *   root    service minecraft backup 2 &\" >> /etc/crontab"
+    ssh $RUSER@$RHOST "echo \"0  12   * * *   root    service minecraft backup 3 &\" >> /etc/crontab"
+    ssh $RUSER@$RHOST "echo \"0  18   * * *   root    service minecraft backup 4 &\" >> /etc/crontab"
+}
+
+case "$1" in
+'start')
+    doStart
+    ;;
+'stop')
+    doStop
+    ;;
+
+'restart')
+    doStop
+    doStart
+    ;;
+'backup')
+    doBackup $2
+    ;;
+'view')
+    screen -x minecraft
+    ;;
+
+'sv')
+    doStart
+    screen -x minecraft
+    ;;
+'updatemods')
+    updateMods
+    ;;
+'clone')
+    cloneServer $2
+    ;;
+*)
+    doStart
+    #echo "Usage: $0 { start | stop | restart | view | sv (start & view) }"
+    ;;
+esac
+exit 0
+
